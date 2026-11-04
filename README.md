@@ -10,6 +10,8 @@ Built using React, FastAPI, LangGraph, Groq, PostgreSQL, and ChromaDB, it provid
 - PDF-based Retrieval-Augmented Generation (RAG).
 - Session-isolated document storage and semantic search using ChromaDB.
 - Persistent chat history and conversation management using PostgreSQL.
+- Structured JSON production logging and request correlation (`X-Request-ID`).
+- Prometheus real-time monitoring and metrics telemetry endpoint (`/metrics`).
 - Context-aware responses based on conversation history and uploaded documents.
 - Interactive ChatGPT-inspired React interface.
 
@@ -22,6 +24,7 @@ The chatbot maintains conversation history, user credentials, and secure session
 - **Frontend:** React, Vite, CSS
 - **Backend:** FastAPI, Python
 - **Database & ORM:** PostgreSQL, SQLAlchemy, Chroma (Vector Store)
+- **Observability & Monitoring:** Prometheus FastAPI Instrumentator, Python JSON Logger
 - **LLM Orchestration:** LangGraph
 - **LLM Integration:** LangChain Groq, HuggingFace Embeddings
 - **LLM Provider:** Groq
@@ -31,6 +34,8 @@ The chatbot maintains conversation history, user credentials, and secure session
 
 - Secure User Authentication with Argon2 password hashing and signed JWT access tokens (Sign In & Sign Up)
 - FastAPI Dependency Injection middleware (`get_current_user`) for protected endpoints
+- Production Observability: Structured JSON logging and automatic request ID tracing (`X-Request-ID`) via custom telemetry middleware
+- Prometheus Metrics Integration: Real-time API monitoring via `/metrics` endpoint for tracking throughput, P95/P99 latency, and HTTP status codes
 - Persistent PostgreSQL backend storage for user accounts, session metadata, and chat messages
 - Vector database integration (Chroma) for document chunk storage and semantic search embeddings
 - Session-isolated PDF document upload, context-aware RAG answering, and file deletion
@@ -56,6 +61,7 @@ chatbot/
 │   ├── models.py
 │   ├── auth_utils.py
 │   ├── dependencies.py
+│   ├── telemetry.py
 │   ├── graph.py
 │   ├── schemas.py
 │   ├── rag_store.py
@@ -132,7 +138,7 @@ Install dependencies:
 uv sync
 ```
 
-(Note: Ensure you install required RAG and security packages including python-jose, sentence-transformers, chromadb, and pypdf).
+(Note: Ensure you install required RAG, observability, and security packages including python-jose, sentence-transformers, chromadb, pypdf, prometheus-fastapi-instrumentator, and python-json-logger).
 
 ### 3. Set Up PostgreSQL Database
 
@@ -171,6 +177,7 @@ The application will automatically create the users and chat_messages tables in 
 The backend will run at:
 
 - API: http://localhost:8000
+- Metrics Endpoint: http://localhost:8000/metrics
 - Interactive API documentation: http://localhost:8000/docs
 
 ### 6. Set Up the Frontend
@@ -202,7 +209,7 @@ http://localhost:5173
 
 ## How It Works
 
-The application follows a secure persistent request-response architecture backed by PostgreSQL, SQLAlchemy, Chroma vector embeddings, JWT validation middleware, and a centralized frontend service layer.
+The application follows a secure persistent request-response architecture backed by PostgreSQL, SQLAlchemy, Chroma vector embeddings, JWT validation middleware, structured JSON logging, Prometheus instrumentation, and a centralized frontend service layer.
 
 ```text
 User / Auth State
@@ -228,6 +235,7 @@ User / Auth State
                                      v
                     FastAPI Backend (Verified via get_current_user dependency)
                                      |
+                                     | Telemetry Middleware Inject X-Request-ID & Emit JSON Logs
                                      | Save User Message Tied to Authenticated User Email
                                      v
                              LangGraph StateGraph (graph.py)
@@ -258,12 +266,28 @@ User / Auth State
 5. **Deleting PDFs:** Users can remove attached PDFs from active sessions (`DELETE /session-docs/{session_id}`), wiping the corresponding vector embeddings.
 6. **Message Input:** The user enters a message in the main chat panel.
 7. **API Request:** React uses the service layer to send the message, current `session_id`, and authorization Bearer token to the FastAPI backend (`/chat` endpoint).
-8. **Token Validation & Logging**: FastAPI decodes and validates the JWT header via `get_current_user`. Both the incoming user prompt and the resulting AI response are persisted in the PostgreSQL `chat_messages` table tied directly to the token's authenticated user email.
+8. **Token Validation & Logging**: FastAPI decodes and validates the JWT header via `get_current_user`. Custom telemetry middleware generates an `X-Request-ID` correlation tag and emits structured JSON log lines. Both user prompt and AI response are persisted in PostgreSQL.
 9. **State Retrieval & LLM:** LangGraph retrieves existing conversation state via `thread_id`, appends the message, and calls the Groq model combined with retrieved document context.
 10. **Response Handling:** FastAPI returns the AI reply along with the `session_id`. React updates state, displays the reply, and re-fetches session lists to update the sidebar.
 11. **New Chat & Logout:**
    - Clicking **"+ New chat"** in the sidebar resets the active `session_id` and message view on the frontend.
    - Clicking **"Log out"** clears `localStorage` credentials and returns the user to the Authentication screen.
+
+## Production Observability & Monitoring
+
+ConvoRAG comes equipped with built-in telemetry tools designed for production cloud deployments (e.g., Kubernetes, Grafana, Prometheus, Datadog):
+
+### 1. Structured JSON Logging
+All application standard outputs (`stdout`) are formatted as single-line JSON logs containing `asctime`, `levelname`, `message`, and `request_id`. This allows log aggregation engines (Datadog, Loki, CloudWatch) to easily parse and query logs.
+
+### 2. Request Tracing (`X-Request-ID`)
+Every incoming HTTP request is assigned a unique UUID `X-Request-ID` header. This ID is passed along middleware execution and attached to error responses, making multi-step RAG retrieval and database queries easy to trace.
+
+### 3. Prometheus Metrics Endpoint (`/metrics`)
+FastAPI exposes real-time time-series data at `/metrics`. You can configure a Prometheus scraper to target this endpoint and connect **Grafana** to monitor:
+- HTTP request counters by route and status code (`http_requests_total`)
+- Latency percentiles and histograms (`http_request_duration_seconds`)
+- System error rates (4xx/5xx responses)
 
 ## API Reference
 
@@ -280,6 +304,14 @@ Example response:
   "status": "Chatbot API is running"
 }
 ```
+
+### Monitoring & Telemetry
+
+#### Prometheus Metrics
+
+**Endpoint:** `GET /metrics`
+
+Exposes real-time Prometheus metrics for scrapers.
 
 ### Authentication
 
@@ -416,6 +448,7 @@ Example response:
   "message": "PDF data cleared for session."
 }
 ```
+
 ### Send a Chat Message
 
 **Endpoint:** `POST /chat`
@@ -490,4 +523,3 @@ Example response:
 - Database persistence for LangGraph checkpointers (PostgresSaver) for multi-instance scaling
 - Streaming LLM responses (Server-Sent Events / WebSockets)
 - Deployment using Docker
-- Production logging and monitoring
